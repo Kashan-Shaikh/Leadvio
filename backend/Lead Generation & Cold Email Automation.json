@@ -1,0 +1,1135 @@
+{
+  "name": "Lead Generation & Cold Email Automation (Enhanced)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-requirements",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-start",
+      "name": "Webhook - Receive Lead Requirements",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [100, 400],
+      "webhookId": "lead-requirements-webhook"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.groq.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={\n  \"model\": \"llama-3.1-70b-versatile\",\n  \"temperature\": 0.3,\n  \"max_tokens\": 2000,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a B2B GTM strategist. Generate structured search instructions for Apollo.io based on user input.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Based on this user input:\\n- Industry: {{ $json.body.industry || '' }}\\n- Persona: {{ $json.body.persona || '' }}\\n- Keywords: {{ $json.body.keywords || '' }}\\n- Job Titles: {{ JSON.stringify($json.body.job_titles || []) }}\\n- Seniorities: {{ JSON.stringify($json.body.seniorities || []) }}\\n- Locations: {{ JSON.stringify($json.body.locations || []) }}\\n- Number of leads: {{ $json.body.limit || 50 }}\\n- Email Style: {{ $json.body.email_style || 'professional' }}\\n- Tone: {{ $json.body.tone || 'professional' }}\\n- Personalization Depth: {{ $json.body.personalization_depth || 'basic' }}\\n\\nGenerate a structured set of search instructions for Apollo.io to find the best leads.\\n\\nOutput ONLY valid JSON with this exact structure:\\n{\\n  \\\"industry\\\": \\\"string\\\",\\n  \\\"persona\\\": \\\"string\\\",\\n  \\\"seniority\\\": [\\\"array of strings\\\"],\\n  \\\"location\\\": [\\\"array of strings\\\"],\\n  \\\"filters\\\": {\\n    \\\"keywords\\\": [\\\"array of relevant keywords\\\"],\\n    \\\"job_titles\\\": [\\\"array of job titles\\\"],\\n    \\\"company_size\\\": \\\"optional filter\\\",\\n    \\\"technologies\\\": [\\\"optional tech stack\\\"]\\n  },\\n  \\\"keywords\\\": [\\\"array of search keywords\\\"]\\n}\\n\\nMake the search instructions specific and optimized for high-quality lead generation.\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "persona-matching-llm",
+      "name": "LLM - Persona Matching",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [300, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "groq-credentials",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract OpenAI response\nconst response = $input.item.json;\nconst content = response.choices?.[0]?.message?.content || response.content || '';\n\nreturn {\n  json: {\n    content: content,\n    raw_response: response\n  }\n};"
+      },
+      "id": "parse-persona-llm-response",
+      "name": "Function - Parse Persona LLM Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [400, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse LLM response and prepare Apollo search parameters\nconst llmResponse = $input.item.json.content || $input.item.json;\nconst userInput = $('Webhook - Receive Lead Requirements').item.json.body;\n\n// Try to parse JSON if it's a string\nlet searchInstructions = llmResponse;\nif (typeof llmResponse === 'string') {\n  try {\n    // Extract JSON from markdown code blocks if present\n    const jsonMatch = llmResponse.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/) || llmResponse.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) {\n      searchInstructions = JSON.parse(jsonMatch[1] || jsonMatch[0]);\n    } else {\n      searchInstructions = JSON.parse(llmResponse);\n    }\n  } catch (e) {\n    // Fallback to user input\n    searchInstructions = {\n      industry: userInput.industry || '',\n      persona: userInput.persona || '',\n      seniority: userInput.seniorities || [],\n      location: userInput.locations || [],\n      filters: {\n        keywords: userInput.keywords ? [userInput.keywords] : [],\n        job_titles: userInput.job_titles || []\n      },\n      keywords: userInput.keywords ? [userInput.keywords] : []\n    };\n  }\n}\n\n// Store user preferences for later use\nreturn {\n  json: {\n    search_instructions: searchInstructions,\n    user_preferences: {\n      email_style: userInput.email_style || 'professional',\n      tone: userInput.tone || 'professional',\n      humanizer: userInput.humanizer !== false,\n      personalization_depth: userInput.personalization_depth || 'basic',\n      limit: userInput.limit || 50\n    }\n  }\n};"
+      },
+      "id": "parse-persona-match",
+      "name": "Function - Parse Persona Match",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [500, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apollo.io/v1/mixed_people/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Cache-Control",
+              "value": "no-cache"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{ $credentials.apollo.apiKey }}"
+            },
+            {
+              "name": "q_keywords",
+              "value": "={{ $json.search_instructions.keywords?.join(' ') || $json.search_instructions.filters?.keywords?.join(' ') || '' }}"
+            },
+            {
+              "name": "person_titles",
+              "value": "={{ $json.search_instructions.filters?.job_titles || $json.search_instructions.filters?.person_titles || [] }}"
+            },
+            {
+              "name": "person_seniorities",
+              "value": "={{ $json.search_instructions.seniority || [] }}"
+            },
+            {
+              "name": "organization_locations",
+              "value": "={{ $json.search_instructions.location || [] }}"
+            },
+            {
+              "name": "page",
+              "value": "=1"
+            },
+            {
+              "name": "per_page",
+              "value": "={{ $json.user_preferences.limit || 50 }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "apollo-search",
+      "name": "Apollo.io - Search Prospects",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [700, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "apollo-credentials",
+          "name": "Apollo.io API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract leads from Apollo response and prepare for processing\nconst apolloResponse = $input.item.json;\nconst userPrefs = $('Function - Parse Persona Match').item.json.user_preferences;\n\nconst leads = [];\nif (apolloResponse.people && Array.isArray(apolloResponse.people)) {\n  for (const person of apolloResponse.people) {\n    leads.push({\n      json: {\n        email: person.email || '',\n        name: (person.first_name || '') + ' ' + (person.last_name || ''),\n        first_name: person.first_name || '',\n        last_name: person.last_name || '',\n        title: person.title || '',\n        company: person.organization?.name || '',\n        company_size: person.organization?.estimated_num_employees || '',\n        linkedin_url: person.linkedin_url || '',\n        location: person.organization?.location || '',\n        apollo_id: person.id || '',\n        industry: person.organization?.industry || '',\n        user_preferences: userPrefs,\n        original_data: person\n      }\n    });\n  }\n}\n\nreturn leads;"
+      },
+      "id": "extract-leads",
+      "name": "Function - Extract Leads",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $credentials.googleSheets.spreadsheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $json.name }}",
+            "Email": "={{ $json.email }}",
+            "Title": "={{ $json.title }}",
+            "Company": "={{ $json.company || '' }}",
+            "LinkedIn URL": "={{ $json.linkedin_url || '' }}",
+            "Location": "={{ $json.location || '' }}",
+            "Status": "=Pending Verification",
+            "Lead Score": "=",
+            "Email Template 1": "=",
+            "Email Template 2": "=",
+            "Email Template 3": "=",
+            "Profile Summary": "=",
+            "Pain Points": "=",
+            "Competitor Gap": "=",
+            "Timestamp": "={{ $now }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "save-initial-leads",
+      "name": "Google Sheets - Save Initial Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [1100, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credentials",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "SplitInBatches - Parallel Processing",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1100, 500]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.zerobounce.net/v2/validate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{ $credentials.zerobounce.apiKey }}"
+            },
+            {
+              "name": "email",
+              "value": "={{ $json.email }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "email-verify",
+      "name": "Email Verification Service",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1300, 500],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "email-verify-credentials",
+          "name": "Email Verification API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter qualified leads (valid emails)\nconst item = $input.item.json;\nconst verification = item || {};\n\n// Check if email is valid (adapt based on your verification API response)\nconst isValid = verification.status === 'valid' || \n                verification.result === 'valid' || \n                (verification.status === 'Valid' && verification.status !== 'Invalid') ||\n                verification.valid === true;\n\nif (isValid && item.email) {\n  return {\n    json: {\n      ...item,\n      email_verified: true,\n      verification_status: 'valid'\n    }\n  };\n}\n\nreturn null;"
+      },
+      "id": "filter-qualified",
+      "name": "Function - Filter Valid Emails",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1500, 500]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.linkedin-scraper.com/v1/profile",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $json.linkedin_url }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "scrape-linkedin",
+      "name": "Scrape LinkedIn Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1700, 500],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "linkedin-scraper-credentials",
+          "name": "LinkedIn Scraper API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.groq.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={\n  \"model\": \"llama-3.1-70b-versatile\",\n  \"temperature\": 0.5,\n  \"max_tokens\": 1500,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a lead qualification analyst. Calculate lead scores based on provided data.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Based on this lead's data:\\n- Name: {{ $json.name }}\\n- Title: {{ $json.title }}\\n- Company: {{ $json.company }}\\n- Company Size: {{ $json.company_size || 'Unknown' }}\\n- Location: {{ $json.location }}\\n- LinkedIn Activity: {{ JSON.stringify($('Scrape LinkedIn Profile').item.json.recent_posts || []) }}\\n- LinkedIn Profile Summary: {{ $('Scrape LinkedIn Profile').item.json.summary || '' }}\\n- Experience: {{ JSON.stringify($('Scrape LinkedIn Profile').item.json.experience || []) }}\\n\\nCalculate a lead score (0-100) reflecting:\\n- Decision-making ability (0-25 points)\\n- Growth intent (0-25 points)\\n- Fit for outreach (0-25 points)\\n- Engagement potential (0-25 points)\\n\\nOutput ONLY valid JSON:\\n{\\n  \\\"lead_score\\\": <number 0-100>,\\n  \\\"justification\\\": [\\n    \\\"<bullet point 1>\\\",\\n    \\\"<bullet point 2>\\\",\\n    \\\"<bullet point 3>\\\"\\n  ],\\n  \\\"score_breakdown\\\": {\\n    \\\"decision_making\\\": <0-25>,\\n    \\\"growth_intent\\\": <0-25>,\\n    \\\"fit\\\": <0-25>,\\n    \\\"engagement\\\": <0-25>\\n  }\\n}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "lead-scoring-llm",
+      "name": "LLM - Lead Scoring",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1900, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "groq-credentials",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Groq response\nconst response = $input.item.json;\nconst content = response.choices?.[0]?.message?.content || response.content || '';\n\nreturn {\n  json: {\n    content: content,\n    raw_response: response\n  }\n};"
+      },
+      "id": "parse-lead-scoring-response",
+      "name": "Function - Parse Lead Scoring Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.groq.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={\n  \"model\": \"llama-3.1-70b-versatile\",\n  \"temperature\": 0.6,\n  \"max_tokens\": 2000,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a competitive research expert. Analyze competitors and identify gaps for sales positioning.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"For the company named \\\"{{ $json.company }}\\\" in the {{ $json.industry || 'their' }} industry, analyze its top 3-5 competitors (assume common competitors for this industry).\\n\\n- Identify strengths and weaknesses (SWOT) of competitors\\n- Highlight messaging or feature gaps that these competitors might be leaving open\\n- Suggest 3 positioning angles for outreach messaging that exploit those gaps\\n\\nProvide a clear, sales-friendly summary.\\n\\nOutput ONLY valid JSON:\\n{\\n  \\\"competitor_analysis\\\": {\\n    \\\"top_competitors\\\": [\\\"competitor1\\\", \\\"competitor2\\\", \\\"competitor3\\\"],\\n    \\\"swot_summary\\\": \\\"brief SWOT analysis\\\",\\n    \\\"gaps\\\": [\\\"gap1\\\", \\\"gap2\\\", \\\"gap3\\\"],\\n    \\\"positioning_angles\\\": [\\n      {\\n        \\\"angle\\\": \\\"angle name\\\",\\n        \\\"description\\\": \\\"how to use this angle\\\"\\n      }\\n    ]\\n  },\\n  \\\"sales_summary\\\": \\\"concise summary for sales team\\\"\\n}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "competitor-gap-llm",
+      "name": "LLM - Competitor Gap Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1900, 600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "groq-credentials",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Groq response\nconst response = $input.item.json;\nconst content = response.choices?.[0]?.message?.content || response.content || '';\n\nreturn {\n  json: {\n    content: content,\n    raw_response: response\n  }\n};"
+      },
+      "id": "parse-competitor-gap-response",
+      "name": "Function - Parse Competitor Gap Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2000, 600]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.groq.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={\n  \"model\": \"llama-3.1-70b-versatile\",\n  \"temperature\": 0.7,\n  \"max_tokens\": 1500,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a B2B pain point analyst. Identify pain points based on lead profiles.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Based on this lead's profile:\\n- Name: {{ $json.name }}\\n- Title: {{ $json.title }}\\n- Company: {{ $json.company }}\\n- Company Size: {{ $json.company_size || 'Unknown' }}\\n- Industry: {{ $json.industry || 'Unknown' }}\\n- LinkedIn Summary: {{ $('Scrape LinkedIn Profile').item.json.summary || '' }}\\n- Recent Posts: {{ JSON.stringify($('Scrape LinkedIn Profile').item.json.recent_posts || []) }}\\n- Experience: {{ JSON.stringify($('Scrape LinkedIn Profile').item.json.experience || []) }}\\n\\nList likely pain points for this lead based on their role, industry, and company size.\\n\\nOutput ONLY valid JSON:\\n{\\n  \\\"pain_points\\\": [\\n    {\\n      \\\"pain_point\\\": \\\"specific pain point\\\",\\n      \\\"relevance\\\": \\\"why this applies\\\",\\n      \\\"urgency\\\": \\\"high/medium/low\\\"\\n    }\\n  ],\\n  \\\"summary\\\": \\\"concise summary of top pain points\\\"\\n}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "pain-point-llm",
+      "name": "LLM - Pain Point Generator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1900, 800],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "groq-credentials",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Groq response\nconst response = $input.item.json;\nconst content = response.choices?.[0]?.message?.content || response.content || '';\n\nreturn {\n  json: {\n    content: content,\n    raw_response: response\n  }\n};"
+      },
+      "id": "parse-pain-point-response",
+      "name": "Function - Parse Pain Point Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2000, 800]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge all research data for email generation\nconst leadData = $('Function - Filter Valid Emails').item.json;\nconst linkedinData = $('Scrape LinkedIn Profile').item.json || {};\nconst scoringData = $('Function - Parse Lead Scoring Response').item.json?.content || $('LLM - Lead Scoring').item.json || {};\nconst competitorData = $('Function - Parse Competitor Gap Response').item.json?.content || $('LLM - Competitor Gap Analysis').item.json || {};\nconst painPointData = $('Function - Parse Pain Point Response').item.json?.content || $('LLM - Pain Point Generator').item.json || {};\n\n// Parse JSON strings if needed\nlet scoring = scoringData;\nlet competitor = competitorData;\nlet painPoints = painPointData;\n\nif (typeof scoringData === 'string') {\n  try {\n    scoring = JSON.parse(scoringData);\n  } catch (e) {}\n}\nif (typeof competitorData === 'string') {\n  try {\n    competitor = JSON.parse(competitorData);\n  } catch (e) {}\n}\nif (typeof painPointData === 'string') {\n  try {\n    painPoints = JSON.parse(painPointData);\n  } catch (e) {}\n}\n\n// Extract LinkedIn insights\nconst recentPost = linkedinData.recent_posts?.[0] || linkedinData.latest_post || '';\nconst linkedinInsight = recentPost ? `Recent post: ${recentPost}` : (linkedinData.summary || '');\n\nreturn {\n  json: {\n    ...leadData,\n    linkedin_data: linkedinData,\n    lead_score: scoring.lead_score || 0,\n    score_justification: scoring.justification || [],\n    score_breakdown: scoring.score_breakdown || {},\n    competitor_gap: competitor.competitor_analysis || competitor,\n    pain_points: painPoints.pain_points || painPoints,\n    pain_points_summary: painPoints.summary || '',\n    linkedin_insight: linkedinInsight,\n    user_preferences: leadData.user_preferences || {}\n  }\n};"
+      },
+      "id": "merge-research",
+      "name": "Function - Merge Research Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2100, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.groq.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={\n  \"model\": \"llama-3.1-70b-versatile\",\n  \"temperature\": 0.8,\n  \"max_tokens\": 3000,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You're a high-performance outreach copywriter. Write personalized cold emails based on prospect data.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Here is the prospect data:\\n- Name: {{ $json.name }}\\n- Title: {{ $json.title }}\\n- Company: {{ $json.company }}\\n- LinkedIn Key Insight or Recent Post: {{ $json.linkedin_insight || 'No recent activity' }}\\n- Key Pain Points: {{ JSON.stringify($json.pain_points || []) }}\\n- Competitor Gap or Opportunity: {{ JSON.stringify($json.competitor_gap || {}) }}\\n- User's Desired Email Style: {{ $json.user_preferences.email_style || 'professional' }} (e.g., \\\"Bold (Hormozi)\\\", \\\"Story (Justin Welsh)\\\", \\\"Professional\\\")\\n- Desired Tone: {{ $json.user_preferences.tone || 'professional' }} (e.g., \\\"confident\\\", \\\"friendly\\\", \\\"professional\\\")\\n- Personalization Depth: {{ $json.user_preferences.personalization_depth || 'basic' }}\\n\\nWrite **3 cold email variations** (subject + body) that:\\n- Open with a personalized ice-breaker referencing their LinkedIn post/company/content\\n- Address a pain point or opportunity\\n- Provide value or insight\\n- End with a clear call-to-action\\n- Use the style & tone the user selected\\n- Each variation should use a different angle: value-based, problem-based, and competitor-gap-based\\n\\nOutput ONLY valid JSON:\\n{\\n  \\\"email_variations\\\": [\\n    {\\n      \\\"angle\\\": \\\"value-based\\\",\\n      \\\"subject\\\": \\\"subject line\\\",\\n      \\\"body\\\": \\\"email body\\\"\\n    },\\n    {\\n      \\\"angle\\\": \\\"problem-based\\\",\\n      \\\"subject\\\": \\\"subject line\\\",\\n      \\\"body\\\": \\\"email body\\\"\\n    },\\n    {\\n      \\\"angle\\\": \\\"competitor-gap-based\\\",\\n      \\\"subject\\\": \\\"subject line\\\",\\n      \\\"body\\\": \\\"email body\\\"\\n    }\\n  ]\\n}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "email-generation-llm",
+      "name": "LLM - Generate 3 Email Variations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2300, 500],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "groq-credentials",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Groq response\nconst response = $input.item.json;\nconst content = response.choices?.[0]?.message?.content || response.content || '';\n\nreturn {\n  json: {\n    content: content,\n    raw_response: response\n  }\n};"
+      },
+      "id": "parse-email-generation-response",
+      "name": "Function - Parse Email Generation Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2400, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if humanizer is enabled and prepare emails\nconst leadData = $('Function - Merge Research Data').item.json;\nconst emailData = $input.item.json.content || $input.item.json;\n\n// Parse email variations\nlet emailVariations = emailData;\nif (typeof emailData === 'string') {\n  try {\n    const jsonMatch = emailData.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/) || emailData.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) {\n      emailVariations = JSON.parse(jsonMatch[1] || jsonMatch[0]);\n    } else {\n      emailVariations = JSON.parse(emailData);\n    }\n  } catch (e) {\n    emailVariations = { email_variations: [] };\n  }\n}\n\nconst humanizerEnabled = leadData.user_preferences?.humanizer !== false;\n\nreturn {\n  json: {\n    ...leadData,\n    email_variations_raw: emailVariations.email_variations || emailVariations,\n    humanizer_enabled: humanizerEnabled\n  }\n};"
+      },
+      "id": "prepare-humanizer",
+      "name": "Function - Prepare for Humanizer",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2500, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.groq.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={\n  \"model\": \"llama-3.1-70b-versatile\",\n  \"temperature\": 0.9,\n  \"max_tokens\": 2000,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a humanizer for outreach emails. Rewrite emails to sound natural and human-written.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Here is an email draft:\\nSubject: {{ $json.email_variations_raw[0]?.subject || 'Email Subject' }}\\n\\nBody:\\n{{ $json.email_variations_raw[0]?.body || 'Email Body' }}\\n\\nRewrite it so that:\\n- It sounds like a real human wrote it\\n- Uses natural sentence rhythms\\n- Adds small filler / transition words (\\\"by the way\\\", \\\"just thinking out loud\\\", \\\"actually\\\", etc.)\\n- Has varied sentence lengths\\n- Is warm and authentic, consistent with the tone: {{ $json.user_preferences.tone || 'professional' }}\\n- Maintains the original message and CTA\\n\\nOutput ONLY valid JSON:\\n{\\n  \\\"subject\\\": \\\"humanized subject\\\",\\n  \\\"body\\\": \\\"humanized body\\\"\\n}\\n\\nIf humanizer is disabled, return the original email as-is.\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "humanizer-llm-1",
+      "name": "LLM - Humanize Email 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2700, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "groq-credentials",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Groq response\nconst response = $input.item.json;\nconst content = response.choices?.[0]?.message?.content || response.content || '';\n\nreturn {\n  json: {\n    content: content,\n    raw_response: response\n  }\n};"
+      },
+      "id": "parse-humanizer-1-response",
+      "name": "Function - Parse Humanizer 1 Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2800, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.groq.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={\n  \"model\": \"llama-3.1-70b-versatile\",\n  \"temperature\": 0.9,\n  \"max_tokens\": 2000,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a humanizer for outreach emails. Rewrite emails to sound natural and human-written.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Here is an email draft:\\nSubject: {{ $json.email_variations_raw[1]?.subject || 'Email Subject' }}\\n\\nBody:\\n{{ $json.email_variations_raw[1]?.body || 'Email Body' }}\\n\\nRewrite it so that:\\n- It sounds like a real human wrote it\\n- Uses natural sentence rhythms\\n- Adds small filler / transition words (\\\"by the way\\\", \\\"just thinking out loud\\\", \\\"actually\\\", etc.)\\n- Has varied sentence lengths\\n- Is warm and authentic, consistent with the tone: {{ $json.user_preferences.tone || 'professional' }}\\n- Maintains the original message and CTA\\n\\nOutput ONLY valid JSON:\\n{\\n  \\\"subject\\\": \\\"humanized subject\\\",\\n  \\\"body\\\": \\\"humanized body\\\"\\n}\\n\\nIf humanizer is disabled, return the original email as-is.\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "humanizer-llm-2",
+      "name": "LLM - Humanize Email 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2700, 500],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "groq-credentials",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Groq response\nconst response = $input.item.json;\nconst content = response.choices?.[0]?.message?.content || response.content || '';\n\nreturn {\n  json: {\n    content: content,\n    raw_response: response\n  }\n};"
+      },
+      "id": "parse-humanizer-2-response",
+      "name": "Function - Parse Humanizer 2 Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2800, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.groq.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={\n  \"model\": \"llama-3.1-70b-versatile\",\n  \"temperature\": 0.9,\n  \"max_tokens\": 2000,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a humanizer for outreach emails. Rewrite emails to sound natural and human-written.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Here is an email draft:\\nSubject: {{ $json.email_variations_raw[2]?.subject || 'Email Subject' }}\\n\\nBody:\\n{{ $json.email_variations_raw[2]?.body || 'Email Body' }}\\n\\nRewrite it so that:\\n- It sounds like a real human wrote it\\n- Uses natural sentence rhythms\\n- Adds small filler / transition words (\\\"by the way\\\", \\\"just thinking out loud\\\", \\\"actually\\\", etc.)\\n- Has varied sentence lengths\\n- Is warm and authentic, consistent with the tone: {{ $json.user_preferences.tone || 'professional' }}\\n- Maintains the original message and CTA\\n\\nOutput ONLY valid JSON:\\n{\\n  \\\"subject\\\": \\\"humanized subject\\\",\\n  \\\"body\\\": \\\"humanized body\\\"\\n}\\n\\nIf humanizer is disabled, return the original email as-is.\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "humanizer-llm-3",
+      "name": "LLM - Humanize Email 3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2700, 600],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "groq-credentials",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Groq response\nconst response = $input.item.json;\nconst content = response.choices?.[0]?.message?.content || response.content || '';\n\nreturn {\n  json: {\n    content: content,\n    raw_response: response\n  }\n};"
+      },
+      "id": "parse-humanizer-3-response",
+      "name": "Function - Parse Humanizer 3 Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2800, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge humanized emails (or use originals if humanizer disabled)\nconst leadData = $('Function - Prepare for Humanizer').item.json;\nconst humanized1 = $('Function - Parse Humanizer 1 Response').item.json?.content || $('LLM - Humanize Email 1').item.json || {};\nconst humanized2 = $('Function - Parse Humanizer 2 Response').item.json?.content || $('LLM - Humanize Email 2').item.json || {};\nconst humanized3 = $('Function - Parse Humanizer 3 Response').item.json?.content || $('LLM - Humanize Email 3').item.json || {};\n\n// Parse humanized responses\nlet h1 = humanized1, h2 = humanized2, h3 = humanized3;\n[humanized1, humanized2, humanized3].forEach((h, i) => {\n  if (typeof h === 'string') {\n    try {\n      const jsonMatch = h.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/) || h.match(/\\{[\\s\\S]*\\}/);\n      if (jsonMatch) {\n        const parsed = JSON.parse(jsonMatch[1] || jsonMatch[0]);\n        if (i === 0) h1 = parsed;\n        if (i === 1) h2 = parsed;\n        if (i === 2) h3 = parsed;\n      } else {\n        const parsed = JSON.parse(h);\n        if (i === 0) h1 = parsed;\n        if (i === 1) h2 = parsed;\n        if (i === 2) h3 = parsed;\n      }\n    } catch (e) {}\n  }\n});\n\nconst variations = leadData.email_variations_raw || [];\nconst finalEmails = [\n  {\n    angle: variations[0]?.angle || 'value-based',\n    subject: leadData.humanizer_enabled ? (h1.subject || variations[0]?.subject) : variations[0]?.subject,\n    body: leadData.humanizer_enabled ? (h1.body || variations[0]?.body) : variations[0]?.body\n  },\n  {\n    angle: variations[1]?.angle || 'problem-based',\n    subject: leadData.humanizer_enabled ? (h2.subject || variations[1]?.subject) : variations[1]?.subject,\n    body: leadData.humanizer_enabled ? (h2.body || variations[1]?.body) : variations[1]?.body\n  },\n  {\n    angle: variations[2]?.angle || 'competitor-gap-based',\n    subject: leadData.humanizer_enabled ? (h3.subject || variations[2]?.subject) : variations[2]?.subject,\n    body: leadData.humanizer_enabled ? (h3.body || variations[2]?.body) : variations[2]?.body\n  }\n];\n\nreturn {\n  json: {\n    ...leadData,\n    email_templates: finalEmails\n  }\n};"
+      },
+      "id": "merge-humanized",
+      "name": "Function - Merge Humanized Emails",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2900, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $credentials.groq.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={\n  \"model\": \"llama-3.1-70b-versatile\",\n  \"temperature\": 0.6,\n  \"max_tokens\": 1500,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a sales intelligence analyst. Write comprehensive lead summaries for sales teams.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Based on this lead's complete profile:\\n- Name: {{ $json.name }}\\n- Title: {{ $json.title }}\\n- Company: {{ $json.company }}\\n- Lead Score: {{ $json.lead_score }}\\n- LinkedIn Insights: {{ $json.linkedin_insight }}\\n- Pain Points: {{ JSON.stringify($json.pain_points || []) }}\\n- Competitor Gap: {{ JSON.stringify($json.competitor_gap || {}) }}\\n- Email Templates Generated: {{ JSON.stringify($json.email_templates || []) }}\\n\\nWrite a short summary (2-3 paragraphs) of:\\n1. Who this lead is and why they're a good prospect\\n2. Key insights from their LinkedIn or company research\\n3. Strategic angle for outreach\\n4. Recommended email template to use\\n\\nOutput ONLY valid JSON:\\n{\\n  \\\"profile_summary\\\": \\\"comprehensive summary text\\\",\\n  \\\"strategic_angle\\\": \\\"recommended approach\\\",\\n  \\\"recommended_template\\\": \\\"which email variation to use (1, 2, or 3)\\\"\\n}\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "lead-summary-llm",
+      "name": "LLM - Lead Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [3100, 500],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "groq-credentials",
+          "name": "Groq API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Groq response\nconst response = $input.item.json;\nconst content = response.choices?.[0]?.message?.content || response.content || '';\n\nreturn {\n  json: {\n    content: content,\n    raw_response: response\n  }\n};"
+      },
+      "id": "parse-lead-summary-response",
+      "name": "Function - Parse Lead Summary Response",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [3200, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Finalize lead data with all information\nconst leadData = $('Function - Merge Humanized Emails').item.json;\nconst summaryData = $input.item.json.content || $input.item.json;\n\n// Parse summary\nlet summary = summaryData;\nif (typeof summaryData === 'string') {\n  try {\n    const jsonMatch = summaryData.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/) || summaryData.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) {\n      summary = JSON.parse(jsonMatch[1] || jsonMatch[0]);\n    } else {\n      summary = JSON.parse(summaryData);\n    }\n  } catch (e) {\n    summary = { profile_summary: summaryData };\n  }\n}\n\n// Filter leads by score threshold (e.g., >= 50)\nconst scoreThreshold = 50;\nconst leadScore = leadData.lead_score || 0;\n\nif (leadScore < scoreThreshold) {\n  return null; // Drop low-scoring leads\n}\n\nreturn {\n  json: {\n    name: leadData.name,\n    email: leadData.email,\n    title: leadData.title,\n    company: leadData.company,\n    location: leadData.location,\n    linkedin_url: leadData.linkedin_url,\n    lead_score: leadScore,\n    score_justification: leadData.score_justification || [],\n    score_breakdown: leadData.score_breakdown || {},\n    email_templates: leadData.email_templates || [],\n    profile_summary: summary.profile_summary || summary,\n    strategic_angle: summary.strategic_angle || '',\n    recommended_template: summary.recommended_template || '1',\n    pain_points: leadData.pain_points || [],\n    pain_points_summary: leadData.pain_points_summary || '',\n    competitor_gap: leadData.competitor_gap || {},\n    linkedin_insight: leadData.linkedin_insight || '',\n    email_verified: leadData.email_verified || false\n  }\n};"
+      },
+      "id": "finalize-lead",
+      "name": "Function - Finalize Lead Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [3300, 500]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $credentials.googleSheets.spreadsheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columnToMatchOn": "Email",
+        "valueToMatchOn": "={{ $json.email }}",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status": "=Qualified & Processed",
+            "Lead Score": "={{ $json.lead_score }}",
+            "Email Template 1": "=Subject: {{ $json.email_templates[0]?.subject || '' }}\\n\\n{{ $json.email_templates[0]?.body || '' }}",
+            "Email Template 2": "=Subject: {{ $json.email_templates[1]?.subject || '' }}\\n\\n{{ $json.email_templates[1]?.body || '' }}",
+            "Email Template 3": "=Subject: {{ $json.email_templates[2]?.subject || '' }}\\n\\n{{ $json.email_templates[2]?.body || '' }}",
+            "Profile Summary": "={{ $json.profile_summary }}",
+            "Pain Points": "={{ $json.pain_points_summary }}",
+            "Competitor Gap": "={{ JSON.stringify($json.competitor_gap) }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "save-final-lead",
+      "name": "Google Sheets - Save Final Lead Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.2,
+      "position": [3500, 500],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credentials",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all processed leads\nconst allItems = $input.all();\nconst processedLeads = [];\n\nfor (const item of allItems) {\n  if (item.json) {\n    processedLeads.push(item.json);\n  }\n}\n\nreturn {\n  json: {\n    success: true,\n    total_qualified_leads: processedLeads.length,\n    leads: processedLeads,\n    timestamp: new Date().toISOString(),\n    summary: {\n      average_score: processedLeads.length > 0 ? \n        (processedLeads.reduce((sum, l) => sum + (l.lead_score || 0), 0) / processedLeads.length).toFixed(2) : 0,\n      high_score_leads: processedLeads.filter(l => (l.lead_score || 0) >= 75).length,\n      medium_score_leads: processedLeads.filter(l => (l.lead_score || 0) >= 50 && (l.lead_score || 0) < 75).length\n    }\n  }\n};"
+      },
+      "id": "aggregate-results",
+      "name": "Function - Aggregate Results",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [3700, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [3900, 500]
+    }
+  ],
+  "connections": {
+    "Webhook - Receive Lead Requirements": {
+      "main": [
+        [
+          {
+            "node": "LLM - Persona Matching",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Persona Matching": {
+      "main": [
+        [
+          {
+            "node": "Function - Parse Persona LLM Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Parse Persona LLM Response": {
+      "main": [
+        [
+          {
+            "node": "Function - Parse Persona Match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Parse Persona Match": {
+      "main": [
+        [
+          {
+            "node": "Apollo.io - Search Prospects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apollo.io - Search Prospects": {
+      "main": [
+        [
+          {
+            "node": "Function - Extract Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Extract Leads": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets - Save Initial Leads",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "SplitInBatches - Parallel Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SplitInBatches - Parallel Processing": {
+      "main": [
+        [
+          {
+            "node": "Email Verification Service",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Verification Service": {
+      "main": [
+        [
+          {
+            "node": "Function - Filter Valid Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Filter Valid Emails": {
+      "main": [
+        [
+          {
+            "node": "Scrape LinkedIn Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape LinkedIn Profile": {
+      "main": [
+        [
+          {
+            "node": "LLM - Lead Scoring",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "LLM - Competitor Gap Analysis",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "LLM - Pain Point Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Lead Scoring": {
+      "main": [
+        [
+          {
+            "node": "Function - Parse Lead Scoring Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Parse Lead Scoring Response": {
+      "main": [
+        [
+          {
+            "node": "Function - Merge Research Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Competitor Gap Analysis": {
+      "main": [
+        [
+          {
+            "node": "Function - Parse Competitor Gap Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Parse Competitor Gap Response": {
+      "main": [
+        [
+          {
+            "node": "Function - Merge Research Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Pain Point Generator": {
+      "main": [
+        [
+          {
+            "node": "Function - Parse Pain Point Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Parse Pain Point Response": {
+      "main": [
+        [
+          {
+            "node": "Function - Merge Research Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Merge Research Data": {
+      "main": [
+        [
+          {
+            "node": "LLM - Generate 3 Email Variations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Generate 3 Email Variations": {
+      "main": [
+        [
+          {
+            "node": "Function - Parse Email Generation Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Parse Email Generation Response": {
+      "main": [
+        [
+          {
+            "node": "Function - Prepare for Humanizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Prepare for Humanizer": {
+      "main": [
+        [
+          {
+            "node": "LLM - Humanize Email 1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "LLM - Humanize Email 2",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "LLM - Humanize Email 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Humanize Email 1": {
+      "main": [
+        [
+          {
+            "node": "Function - Parse Humanizer 1 Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Parse Humanizer 1 Response": {
+      "main": [
+        [
+          {
+            "node": "Function - Merge Humanized Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Humanize Email 2": {
+      "main": [
+        [
+          {
+            "node": "Function - Parse Humanizer 2 Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Parse Humanizer 2 Response": {
+      "main": [
+        [
+          {
+            "node": "Function - Merge Humanized Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Humanize Email 3": {
+      "main": [
+        [
+          {
+            "node": "Function - Parse Humanizer 3 Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Parse Humanizer 3 Response": {
+      "main": [
+        [
+          {
+            "node": "Function - Merge Humanized Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Merge Humanized Emails": {
+      "main": [
+        [
+          {
+            "node": "LLM - Lead Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Lead Summary": {
+      "main": [
+        [
+          {
+            "node": "Function - Parse Lead Summary Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Parse Lead Summary Response": {
+      "main": [
+        [
+          {
+            "node": "Function - Finalize Lead Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Finalize Lead Data": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets - Save Final Lead Data",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Function - Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Function - Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "2"
+}
